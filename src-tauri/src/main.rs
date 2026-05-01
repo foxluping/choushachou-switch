@@ -90,9 +90,16 @@ fn save_config(config: Config) -> Result<(), String> {
         } else {
             serde_json::Map::new()
         };
+        // 同时设置 ANTHROPIC_API_KEY 和 ANTHROPIC_AUTH_TOKEN
+        // ANTHROPIC_API_KEY: 作为 X-Api-Key 标头发送 (某些版本 Claude Code 启动时必须检测到)
+        // ANTHROPIC_AUTH_TOKEN: 作为 Authorization: Bearer 标头发送
         env.insert(
             "ANTHROPIC_BASE_URL".to_string(),
             serde_json::Value::String(API_BASE_URL.to_string()),
+        );
+        env.insert(
+            "ANTHROPIC_API_KEY".to_string(),
+            serde_json::Value::String(config.api_key.clone()),
         );
         env.insert(
             "ANTHROPIC_AUTH_TOKEN".to_string(),
@@ -117,6 +124,7 @@ fn save_config(config: Config) -> Result<(), String> {
         if let Some(env_val) = obj.get_mut("env") {
             if let Some(env_obj) = env_val.as_object_mut() {
                 env_obj.remove("ANTHROPIC_BASE_URL");
+                env_obj.remove("ANTHROPIC_API_KEY");
                 env_obj.remove("ANTHROPIC_AUTH_TOKEN");
                 env_obj.remove("CLAUDE_CODE_USE_BEDROCK");
                 env_obj.remove("CLAUDE_CODE_USE_VERTEX");
