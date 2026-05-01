@@ -26,6 +26,12 @@ fn get_claude_settings_path() -> PathBuf {
     home.join(".claude").join("settings.json")
 }
 
+/// 获取 ~/.claude.json 路径 (Claude Code 的 onboarding 状态文件)
+fn get_claude_json_path() -> PathBuf {
+    let home = dirs::home_dir().expect("Cannot find home directory");
+    home.join(".claude.json")
+}
+
 /// 获取我们自己的配置文件路径（存储 API Key 等）
 fn get_app_config_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot find home directory");
@@ -34,6 +40,37 @@ fn get_app_config_path() -> PathBuf {
         fs::create_dir_all(&dir).ok();
     }
     dir.join("config.json")
+}
+
+/// 确保 ~/.claude.json 存在且包含 hasCompletedOnboarding: true
+/// 这解决了 Claude Code 首次运行时忽略 settings.json 中 env 配置的 bug
+fn ensure_claude_json() {
+    let path = get_claude_json_path();
+    if path.exists() {
+        // 读取现有内容，确保有 hasCompletedOnboarding
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(obj) = val.as_object_mut() {
+                if !obj.contains_key("hasCompletedOnboarding") {
+                    obj.insert(
+                        "hasCompletedOnboarding".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                    if let Ok(output) = serde_json::to_string_pretty(&val) {
+                        fs::write(&path, output).ok();
+                    }
+                }
+            }
+        }
+    } else {
+        // 创建新的 ~/.claude.json
+        let val = serde_json::json!({
+            "hasCompletedOnboarding": true
+        });
+        if let Ok(output) = serde_json::to_string_pretty(&val) {
+            fs::write(&path, output).ok();
+        }
+    }
 }
 
 /// 加载 app 配置
@@ -59,6 +96,9 @@ fn load_config() -> Config {
 /// 保存配置并写入 Claude Code settings.json
 #[tauri::command]
 fn save_config(config: Config) -> Result<(), String> {
+    // 0. 确保 ~/.claude.json 存在 (解决首次运行 settings.json 被忽略的问题)
+    ensure_claude_json();
+
     // 1. 保存 app 自己的配置
     let app_path = get_app_config_path();
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
@@ -91,7 +131,7 @@ fn save_config(config: Config) -> Result<(), String> {
             serde_json::Map::new()
         };
         // 同时设置 ANTHROPIC_API_KEY 和 ANTHROPIC_AUTH_TOKEN
-        // ANTHROPIC_API_KEY: 作为 X-Api-Key 标头发送 (某些版本 Claude Code 启动时必须检测到)
+        // ANTHROPIC_API_KEY: 作为 X-Api-Key 标头发送 (Claude Code 启动时必须检测到)
         // ANTHROPIC_AUTH_TOKEN: 作为 Authorization: Bearer 标头发送
         env.insert(
             "ANTHROPIC_BASE_URL".to_string(),
