@@ -1,0 +1,18 @@
+[package]
+name = "choushachou-switch"
+version = "1.0.0"
+description = "抽纱绸 AI - Claude Code 自定义 API 配置工具"
+authors = ["choushachou"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["full"] }
+dirs = "5"
