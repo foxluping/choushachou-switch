@@ -48,6 +48,7 @@ function App() {
     custom_path: "",
     api_url: DEFAULT_API_URL,
   });
+  const [customModelInput, setCustomModelInput] = useState("");
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -344,6 +345,38 @@ function App() {
       {/* 默认模型 */}
       <section className="card">
         <h3>默认模型</h3>
+        <div className="custom-model-row">
+          <input
+            type="text"
+            placeholder="输入自定义模型名称，如 gpt-5.3-codex"
+            value={customModelInput}
+            onChange={(e) => setCustomModelInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && customModelInput.trim()) {
+                setConfig({ ...config, default_model: customModelInput.trim() });
+                setCustomModelInput("");
+              }
+            }}
+            className="input"
+          />
+          <button
+            onClick={() => {
+              if (customModelInput.trim()) {
+                setConfig({ ...config, default_model: customModelInput.trim() });
+                setCustomModelInput("");
+              }
+            }}
+            disabled={!customModelInput.trim()}
+            className="btn btn-secondary btn-small"
+          >
+            应用
+          </button>
+        </div>
+        {config.default_model && !MODELS.find((m) => m.id === config.default_model) && (
+          <div className="current-custom-model">
+            当前自定义模型: <span className="custom-model-name">{config.default_model}</span>
+          </div>
+        )}
         <div className="models-grid">
           {MODELS.map((model) => (
             <div

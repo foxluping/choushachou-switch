@@ -212,6 +212,29 @@ input:checked + .slider:before {
   margin-top: 8px;
 }
 
+/* Custom Model Input */
+.custom-model-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.current-custom-model {
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: rgba(108, 99, 255, 0.08);
+  border: 1px solid rgba(108, 99, 255, 0.2);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.custom-model-name {
+  font-weight: 600;
+  font-family: monospace;
+}
+
 /* Models Grid */
 .models-grid {
   display: grid;
