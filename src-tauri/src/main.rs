@@ -12,6 +12,8 @@ struct Config {
     api_key: String,
     enabled: bool,
     default_model: String,
+    #[serde(default)]
+    custom_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,8 +22,8 @@ struct TestResult {
     message: String,
 }
 
-/// 获取 ~/.claude/settings.json 路径
-fn get_claude_settings_path() -> PathBuf {
+/// 获取 ~/.claude/settings.json 的默认路径
+fn get_default_claude_settings_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot find home directory");
     home.join(".claude").join("settings.json")
 }
@@ -30,6 +32,15 @@ fn get_claude_settings_path() -> PathBuf {
 fn get_claude_json_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot find home directory");
     home.join(".claude.json")
+}
+
+/// 获取 Claude Code settings.json 路径（优先使用自定义路径）
+fn get_claude_settings_path(custom_path: &str) -> PathBuf {
+    if custom_path.is_empty() {
+        get_default_claude_settings_path()
+    } else {
+        PathBuf::from(custom_path)
+    }
 }
 
 /// 获取我们自己的配置文件路径（存储 API Key 等）
@@ -73,6 +84,57 @@ fn ensure_claude_json() {
     }
 }
 
+/// 获取默认路径（返回给前端展示）
+#[tauri::command]
+fn get_default_path() -> String {
+    get_default_claude_settings_path()
+        .to_string_lossy()
+        .to_string()
+}
+
+/// 检测路径是否有效
+#[tauri::command]
+fn detect_settings_path() -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+
+    // 默认路径
+    let default_path = get_default_claude_settings_path();
+    if default_path.exists() {
+        paths.push(default_path.to_string_lossy().to_string());
+    }
+
+    // Windows 上额外检查一些常见路径
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(home) = dirs::home_dir() {
+            let alt_paths = vec![
+                home.join(".claude").join("settings.json"),
+                home.join("AppData")
+                    .join("Roaming")
+                    .join("claude")
+                    .join("settings.json"),
+                home.join("AppData")
+                    .join("Local")
+                    .join("claude")
+                    .join("settings.json"),
+            ];
+            for p in alt_paths {
+                let s = p.to_string_lossy().to_string();
+                if p.exists() && !paths.contains(&s) {
+                    paths.push(s);
+                }
+            }
+        }
+    }
+
+    // 如果没找到任何已存在的文件，至少返回默认路径
+    if paths.is_empty() {
+        paths.push(default_path.to_string_lossy().to_string());
+    }
+
+    paths
+}
+
 /// 加载 app 配置
 #[tauri::command]
 fn load_config() -> Config {
@@ -83,12 +145,14 @@ fn load_config() -> Config {
             api_key: String::new(),
             enabled: false,
             default_model: "claude-sonnet-4-6".to_string(),
+            custom_path: String::new(),
         })
     } else {
         Config {
             api_key: String::new(),
             enabled: false,
             default_model: "claude-sonnet-4-6".to_string(),
+            custom_path: String::new(),
         }
     }
 }
@@ -105,9 +169,9 @@ fn save_config(config: Config) -> Result<(), String> {
     fs::write(&app_path, json).map_err(|e| format!("写入配置失败: {}", e))?;
 
     // 2. 修改 Claude Code 的 settings.json
-    let claude_path = get_claude_settings_path();
+    let claude_path = get_claude_settings_path(&config.custom_path);
 
-    // 确保 ~/.claude 目录存在
+    // 确保目录存在
     if let Some(parent) = claude_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -124,13 +188,13 @@ fn save_config(config: Config) -> Result<(), String> {
 
     if config.enabled {
         // 启用: 设置环境变量让 Claude Code 走我们的 API
-        // 保留现有 env 中的其他配置
         let mut env = if let Some(existing_env) = obj.get("env") {
             existing_env.as_object().cloned().unwrap_or_default()
         } else {
             serde_json::Map::new()
         };
-        // 同时设置 ANTHROPIC_API_KEY 和 ANTHROPIC_AUTH_TOKEN
+
+        // API 认证
         // ANTHROPIC_API_KEY: 作为 X-Api-Key 标头发送 (Claude Code 启动时必须检测到)
         // ANTHROPIC_AUTH_TOKEN: 作为 Authorization: Bearer 标头发送
         env.insert(
@@ -145,6 +209,22 @@ fn save_config(config: Config) -> Result<(), String> {
             "ANTHROPIC_AUTH_TOKEN".to_string(),
             serde_json::Value::String(config.api_key.clone()),
         );
+
+        // 模型配置：将用户选择的模型写入所有三个模型槽位
+        env.insert(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            serde_json::Value::String(config.default_model.clone()),
+        );
+        env.insert(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            serde_json::Value::String(config.default_model.clone()),
+        );
+        env.insert(
+            "ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(),
+            serde_json::Value::String(config.default_model.clone()),
+        );
+
+        // 禁用官方流量和其他 provider
         env.insert(
             "CLAUDE_CODE_USE_BEDROCK".to_string(),
             serde_json::Value::String("0".to_string()),
@@ -166,6 +246,9 @@ fn save_config(config: Config) -> Result<(), String> {
                 env_obj.remove("ANTHROPIC_BASE_URL");
                 env_obj.remove("ANTHROPIC_API_KEY");
                 env_obj.remove("ANTHROPIC_AUTH_TOKEN");
+                env_obj.remove("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+                env_obj.remove("ANTHROPIC_DEFAULT_SONNET_MODEL");
+                env_obj.remove("ANTHROPIC_DEFAULT_OPUS_MODEL");
                 env_obj.remove("CLAUDE_CODE_USE_BEDROCK");
                 env_obj.remove("CLAUDE_CODE_USE_VERTEX");
                 env_obj.remove("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC");
@@ -220,10 +303,13 @@ async fn test_connection(api_key: String) -> Result<TestResult, String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             load_config,
             save_config,
-            test_connection
+            test_connection,
+            get_default_path,
+            detect_settings_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

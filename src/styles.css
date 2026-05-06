@@ -299,6 +299,58 @@ input:checked + .slider:before {
   }
 }
 
+/* Path Section */
+.path-display {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.path-input {
+  font-family: monospace;
+  font-size: 0.8rem !important;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.btn-small {
+  padding: 8px 12px;
+  font-size: 0.8rem;
+}
+
+.detected-paths {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.path-option {
+  font-family: monospace;
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  margin-top: 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+  word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.path-option:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.path-option.active {
+  border-color: var(--accent);
+  background: rgba(108, 99, 255, 0.1);
+  color: var(--accent);
+}
+
 /* Footer */
 .footer {
   text-align: center;
@@ -311,4 +363,6 @@ input:checked + .slider:before {
   font-size: 0.75rem;
   color: var(--text-dim);
   font-family: monospace;
+  word-break: break-all;
+  margin-bottom: 4px;
 }

@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 interface Config {
   api_key: string;
   enabled: boolean;
   default_model: string;
+  custom_path: string;
 }
 
 interface TestResult {
@@ -28,14 +30,18 @@ function App() {
     api_key: "",
     enabled: false,
     default_model: "claude-sonnet-4-6",
+    custom_path: "",
   });
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [defaultPath, setDefaultPath] = useState("");
+  const [detectedPaths, setDetectedPaths] = useState<string[]>([]);
 
   useEffect(() => {
     loadConfig();
+    loadPaths();
   }, []);
 
   async function loadConfig() {
@@ -46,6 +52,17 @@ function App() {
       console.error("Failed to load config:", e);
     }
     setLoaded(true);
+  }
+
+  async function loadPaths() {
+    try {
+      const dp = await invoke<string>("get_default_path");
+      setDefaultPath(dp);
+      const paths = await invoke<string[]>("detect_settings_path");
+      setDetectedPaths(paths);
+    } catch (e) {
+      console.error("Failed to detect paths:", e);
+    }
   }
 
   async function saveConfig() {
@@ -91,6 +108,27 @@ function App() {
     setSaving(false);
   }
 
+  async function browsePath() {
+    try {
+      const selected = await open({
+        filters: [{ name: "JSON", extensions: ["json"] }],
+        multiple: false,
+        title: "选择 Claude Code settings.json 文件",
+      });
+      if (selected) {
+        setConfig({ ...config, custom_path: selected as string });
+      }
+    } catch (e) {
+      console.error("Browse failed:", e);
+    }
+  }
+
+  function resetToDefault() {
+    setConfig({ ...config, custom_path: "" });
+  }
+
+  const displayPath = config.custom_path || defaultPath;
+
   if (!loaded) {
     return <div className="loading">加载中...</div>;
   }
@@ -123,6 +161,43 @@ function App() {
             <span className="slider"></span>
           </label>
         </div>
+      </section>
+
+      {/* 配置文件路径 */}
+      <section className="card">
+        <h3>配置文件路径</h3>
+        <p className="hint">Claude Code settings.json 位置</p>
+        <div className="path-display">
+          <input
+            type="text"
+            className="input path-input"
+            value={displayPath}
+            onChange={(e) => setConfig({ ...config, custom_path: e.target.value })}
+            placeholder={defaultPath}
+          />
+          <button onClick={browsePath} className="btn btn-secondary btn-small">
+            浏览
+          </button>
+          {config.custom_path && (
+            <button onClick={resetToDefault} className="btn btn-secondary btn-small">
+              重置
+            </button>
+          )}
+        </div>
+        {detectedPaths.length > 1 && (
+          <div className="detected-paths">
+            <p className="hint">检测到的路径:</p>
+            {detectedPaths.map((p) => (
+              <div
+                key={p}
+                className={`path-option ${displayPath === p ? "active" : ""}`}
+                onClick={() => setConfig({ ...config, custom_path: p })}
+              >
+                {p}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* API Key */}
@@ -183,7 +258,8 @@ function App() {
       </button>
 
       <footer className="footer">
-        <p>配置文件: ~/.claude/settings.json</p>
+        <p>配置文件: {displayPath}</p>
+        <p className="hint">保存后请重启 Claude Code 使配置生效</p>
       </footer>
     </div>
   );
