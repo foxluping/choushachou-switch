@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const API_BASE_URL: &str = "https://api.choushachou.top";
+const DEFAULT_API_BASE_URL: &str = "https://api.choushachou.top";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
@@ -14,6 +14,28 @@ struct Config {
     default_model: String,
     #[serde(default)]
     custom_path: String,
+    #[serde(default = "default_api_url")]
+    api_url: String,
+}
+
+fn default_api_url() -> String {
+    DEFAULT_API_BASE_URL.to_string()
+}
+
+/// 预设配置
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Preset {
+    name: String,
+    api_key: String,
+    api_url: String,
+    default_model: String,
+}
+
+/// 预设配置列表
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct PresetsStore {
+    presets: Vec<Preset>,
+    last_used: Option<String>, // 上次使用的预设名称
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,12 +75,20 @@ fn get_app_config_path() -> PathBuf {
     dir.join("config.json")
 }
 
+/// 获取预设配置存储路径
+fn get_presets_path() -> PathBuf {
+    let home = dirs::home_dir().expect("Cannot find home directory");
+    let dir = home.join(".choushachou-switch");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).ok();
+    }
+    dir.join("presets.json")
+}
+
 /// 确保 ~/.claude.json 存在且包含 hasCompletedOnboarding: true
-/// 这解决了 Claude Code 首次运行时忽略 settings.json 中 env 配置的 bug
 fn ensure_claude_json() {
     let path = get_claude_json_path();
     if path.exists() {
-        // 读取现有内容，确保有 hasCompletedOnboarding
         let content = fs::read_to_string(&path).unwrap_or_default();
         if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(obj) = val.as_object_mut() {
@@ -74,7 +104,6 @@ fn ensure_claude_json() {
             }
         }
     } else {
-        // 创建新的 ~/.claude.json
         let val = serde_json::json!({
             "hasCompletedOnboarding": true
         });
@@ -97,13 +126,11 @@ fn get_default_path() -> String {
 fn detect_settings_path() -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
 
-    // 默认路径
     let default_path = get_default_claude_settings_path();
     if default_path.exists() {
         paths.push(default_path.to_string_lossy().to_string());
     }
 
-    // Windows 上额外检查一些常见路径
     #[cfg(target_os = "windows")]
     {
         if let Some(home) = dirs::home_dir() {
@@ -127,7 +154,6 @@ fn detect_settings_path() -> Vec<String> {
         }
     }
 
-    // 如果没找到任何已存在的文件，至少返回默认路径
     if paths.is_empty() {
         paths.push(default_path.to_string_lossy().to_string());
     }
@@ -146,6 +172,7 @@ fn load_config() -> Config {
             enabled: false,
             default_model: "claude-sonnet-4-6".to_string(),
             custom_path: String::new(),
+            api_url: DEFAULT_API_BASE_URL.to_string(),
         })
     } else {
         Config {
@@ -153,6 +180,7 @@ fn load_config() -> Config {
             enabled: false,
             default_model: "claude-sonnet-4-6".to_string(),
             custom_path: String::new(),
+            api_url: DEFAULT_API_BASE_URL.to_string(),
         }
     }
 }
@@ -160,7 +188,7 @@ fn load_config() -> Config {
 /// 保存配置并写入 Claude Code settings.json
 #[tauri::command]
 fn save_config(config: Config) -> Result<(), String> {
-    // 0. 确保 ~/.claude.json 存在 (解决首次运行 settings.json 被忽略的问题)
+    // 0. 确保 ~/.claude.json 存在
     ensure_claude_json();
 
     // 1. 保存 app 自己的配置
@@ -171,12 +199,10 @@ fn save_config(config: Config) -> Result<(), String> {
     // 2. 修改 Claude Code 的 settings.json
     let claude_path = get_claude_settings_path(&config.custom_path);
 
-    // 确保目录存在
     if let Some(parent) = claude_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
 
-    // 读取现有配置，如果没有就创建空对象
     let mut settings: serde_json::Value = if claude_path.exists() {
         let content = fs::read_to_string(&claude_path).unwrap_or_default();
         serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
@@ -186,20 +212,23 @@ fn save_config(config: Config) -> Result<(), String> {
 
     let obj = settings.as_object_mut().ok_or("settings.json 格式错误")?;
 
+    // 使用配置中的 api_url，如果为空则用默认值
+    let api_url = if config.api_url.is_empty() {
+        DEFAULT_API_BASE_URL.to_string()
+    } else {
+        config.api_url.clone()
+    };
+
     if config.enabled {
-        // 启用: 设置环境变量让 Claude Code 走我们的 API
         let mut env = if let Some(existing_env) = obj.get("env") {
             existing_env.as_object().cloned().unwrap_or_default()
         } else {
             serde_json::Map::new()
         };
 
-        // API 认证
-        // ANTHROPIC_API_KEY: 作为 X-Api-Key 标头发送 (Claude Code 启动时必须检测到)
-        // ANTHROPIC_AUTH_TOKEN: 作为 Authorization: Bearer 标头发送
         env.insert(
             "ANTHROPIC_BASE_URL".to_string(),
-            serde_json::Value::String(API_BASE_URL.to_string()),
+            serde_json::Value::String(api_url),
         );
         env.insert(
             "ANTHROPIC_API_KEY".to_string(),
@@ -210,7 +239,6 @@ fn save_config(config: Config) -> Result<(), String> {
             serde_json::Value::String(config.api_key.clone()),
         );
 
-        // 模型配置：将用户选择的模型写入所有三个模型槽位
         env.insert(
             "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
             serde_json::Value::String(config.default_model.clone()),
@@ -224,7 +252,6 @@ fn save_config(config: Config) -> Result<(), String> {
             serde_json::Value::String(config.default_model.clone()),
         );
 
-        // 禁用官方流量和其他 provider
         env.insert(
             "CLAUDE_CODE_USE_BEDROCK".to_string(),
             serde_json::Value::String("0".to_string()),
@@ -240,7 +267,6 @@ fn save_config(config: Config) -> Result<(), String> {
 
         obj.insert("env".to_string(), serde_json::Value::Object(env));
     } else {
-        // 禁用: 移除我们设置的环境变量
         if let Some(env_val) = obj.get_mut("env") {
             if let Some(env_obj) = env_val.as_object_mut() {
                 env_obj.remove("ANTHROPIC_BASE_URL");
@@ -252,7 +278,6 @@ fn save_config(config: Config) -> Result<(), String> {
                 env_obj.remove("CLAUDE_CODE_USE_BEDROCK");
                 env_obj.remove("CLAUDE_CODE_USE_VERTEX");
                 env_obj.remove("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC");
-                // 如果 env 为空，整个移除
                 if env_obj.is_empty() {
                     obj.remove("env");
                 }
@@ -266,13 +291,17 @@ fn save_config(config: Config) -> Result<(), String> {
     Ok(())
 }
 
-/// 测试 API 连通性
+/// 测试 API 连通性（使用自定义 URL）
 #[tauri::command]
-async fn test_connection(api_key: String) -> Result<TestResult, String> {
+async fn test_connection(api_key: String, api_url: Option<String>) -> Result<TestResult, String> {
+    let base_url = api_url
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| DEFAULT_API_BASE_URL.to_string());
+
     let client = reqwest::Client::new();
 
     let resp = client
-        .get(format!("{}/v1/models", API_BASE_URL))
+        .get(format!("{}/v1/models", base_url))
         .header("Authorization", format!("Bearer {}", api_key))
         .timeout(std::time::Duration::from_secs(10))
         .send()
@@ -300,6 +329,66 @@ async fn test_connection(api_key: String) -> Result<TestResult, String> {
     }
 }
 
+/// 加载预设列表
+#[tauri::command]
+fn load_presets() -> PresetsStore {
+    let path = get_presets_path();
+    if path.exists() {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        PresetsStore::default()
+    }
+}
+
+/// 保存预设
+#[tauri::command]
+fn save_preset(preset: Preset) -> Result<PresetsStore, String> {
+    let path = get_presets_path();
+    let mut store = if path.exists() {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        PresetsStore::default()
+    };
+
+    // 如果同名预设已存在，替换之
+    if let Some(existing) = store.presets.iter_mut().find(|p| p.name == preset.name) {
+        *existing = preset.clone();
+    } else {
+        store.presets.push(preset.clone());
+    }
+
+    store.last_used = Some(preset.name);
+
+    let json = serde_json::to_string_pretty(&store).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| format!("保存预设失败: {}", e))?;
+
+    Ok(store)
+}
+
+/// 删除预设
+#[tauri::command]
+fn delete_preset(name: String) -> Result<PresetsStore, String> {
+    let path = get_presets_path();
+    let mut store = if path.exists() {
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        PresetsStore::default()
+    };
+
+    store.presets.retain(|p| p.name != name);
+    if store.last_used.as_deref() == Some(&name) {
+        store.last_used = None;
+    }
+
+    let json = serde_json::to_string_pretty(&store).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| format!("删除预设失败: {}", e))?;
+
+    Ok(store)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -309,7 +398,10 @@ fn main() {
             save_config,
             test_connection,
             get_default_path,
-            detect_settings_path
+            detect_settings_path,
+            load_presets,
+            save_preset,
+            delete_preset
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,11 +7,24 @@ interface Config {
   enabled: boolean;
   default_model: string;
   custom_path: string;
+  api_url: string;
 }
 
 interface TestResult {
   success: boolean;
   message: string;
+}
+
+interface Preset {
+  name: string;
+  api_key: string;
+  api_url: string;
+  default_model: string;
+}
+
+interface PresetsStore {
+  presets: Preset[];
+  last_used: string | null;
 }
 
 const MODELS = [
@@ -25,12 +38,15 @@ const MODELS = [
   { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", desc: "轻快日常", provider: "Anthropic" },
 ];
 
+const DEFAULT_API_URL = "https://api.choushachou.top";
+
 function App() {
   const [config, setConfig] = useState<Config>({
     api_key: "",
     enabled: false,
     default_model: "claude-sonnet-4-6",
     custom_path: "",
+    api_url: DEFAULT_API_URL,
   });
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testing, setTesting] = useState(false);
@@ -38,10 +54,14 @@ function App() {
   const [loaded, setLoaded] = useState(false);
   const [defaultPath, setDefaultPath] = useState("");
   const [detectedPaths, setDetectedPaths] = useState<string[]>([]);
+  const [presetsStore, setPresetsStore] = useState<PresetsStore>({ presets: [], last_used: null });
+  const [presetName, setPresetName] = useState("");
+  const [showPresetInput, setShowPresetInput] = useState(false);
 
   useEffect(() => {
     loadConfig();
     loadPaths();
+    loadPresets();
   }, []);
 
   async function loadConfig() {
@@ -65,6 +85,15 @@ function App() {
     }
   }
 
+  async function loadPresets() {
+    try {
+      const store = await invoke<PresetsStore>("load_presets");
+      setPresetsStore(store);
+    } catch (e) {
+      console.error("Failed to load presets:", e);
+    }
+  }
+
   async function saveConfig() {
     setSaving(true);
     try {
@@ -82,6 +111,7 @@ function App() {
     try {
       const result = await invoke<TestResult>("test_connection", {
         apiKey: config.api_key,
+        apiUrl: config.api_url || null,
       });
       setTestResult(result);
     } catch (e: any) {
@@ -127,6 +157,46 @@ function App() {
     setConfig({ ...config, custom_path: "" });
   }
 
+  async function saveAsPreset() {
+    if (!presetName.trim()) return;
+    try {
+      const preset: Preset = {
+        name: presetName.trim(),
+        api_key: config.api_key,
+        api_url: config.api_url,
+        default_model: config.default_model,
+      };
+      const store = await invoke<PresetsStore>("save_preset", { preset });
+      setPresetsStore(store);
+      setPresetName("");
+      setShowPresetInput(false);
+      setTestResult({ success: true, message: `预设「${preset.name}」已保存` });
+    } catch (e: any) {
+      setTestResult({ success: false, message: `保存预设失败: ${e}` });
+    }
+  }
+
+  async function applyPreset(preset: Preset) {
+    const newConfig = {
+      ...config,
+      api_key: preset.api_key,
+      api_url: preset.api_url,
+      default_model: preset.default_model,
+    };
+    setConfig(newConfig);
+    setTestResult({ success: true, message: `已加载预设「${preset.name}」，点击保存配置以应用` });
+  }
+
+  async function deletePreset(name: string) {
+    try {
+      const store = await invoke<PresetsStore>("delete_preset", { name });
+      setPresetsStore(store);
+      setTestResult({ success: true, message: `预设「${name}」已删除` });
+    } catch (e: any) {
+      setTestResult({ success: false, message: `删除预设失败: ${e}` });
+    }
+  }
+
   const displayPath = config.custom_path || defaultPath;
 
   if (!loaded) {
@@ -139,6 +209,33 @@ function App() {
         <h1 className="title">抽纱绸 AI</h1>
         <p className="subtitle">Claude Code 自定义 API 配置工具</p>
       </header>
+
+      {/* 预设配置 */}
+      {presetsStore.presets.length > 0 && (
+        <section className="card">
+          <h3>快速切换配置</h3>
+          <p className="hint">选择已保存的预设配置，一键加载</p>
+          <div className="presets-list">
+            {presetsStore.presets.map((preset) => (
+              <div key={preset.name} className="preset-item">
+                <div className="preset-info" onClick={() => applyPreset(preset)}>
+                  <div className="preset-name">{preset.name}</div>
+                  <div className="preset-detail">
+                    {preset.api_url} · {preset.default_model}
+                  </div>
+                </div>
+                <button
+                  className="btn-icon btn-delete"
+                  onClick={() => deletePreset(preset.name)}
+                  title="删除预设"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* 开关 */}
       <section className="card">
@@ -200,6 +297,29 @@ function App() {
         )}
       </section>
 
+      {/* API URL */}
+      <section className="card">
+        <h3>API 地址</h3>
+        <p className="hint">自定义 API 服务地址（留空使用默认）</p>
+        <div className="input-group">
+          <input
+            type="text"
+            placeholder={DEFAULT_API_URL}
+            value={config.api_url}
+            onChange={(e) => setConfig({ ...config, api_url: e.target.value })}
+            className="input"
+          />
+          {config.api_url !== DEFAULT_API_URL && (
+            <button
+              onClick={() => setConfig({ ...config, api_url: DEFAULT_API_URL })}
+              className="btn btn-secondary btn-small"
+            >
+              默认
+            </button>
+          )}
+        </div>
+      </section>
+
       {/* API Key */}
       <section className="card">
         <h3>API 令牌</h3>
@@ -248,14 +368,45 @@ function App() {
         </div>
       )}
 
-      {/* 保存按钮 */}
-      <button
-        onClick={saveConfig}
-        disabled={saving || !config.api_key}
-        className="btn btn-primary btn-full"
-      >
-        {saving ? "保存中..." : "保存配置"}
-      </button>
+      {/* 操作按钮 */}
+      <div className="action-buttons">
+        <button
+          onClick={saveConfig}
+          disabled={saving || !config.api_key}
+          className="btn btn-primary btn-full"
+        >
+          {saving ? "保存中..." : "保存配置"}
+        </button>
+
+        {/* 保存为预设 */}
+        {!showPresetInput ? (
+          <button
+            onClick={() => setShowPresetInput(true)}
+            disabled={!config.api_key}
+            className="btn btn-secondary btn-full"
+          >
+            保存为预设
+          </button>
+        ) : (
+          <div className="preset-save-row">
+            <input
+              type="text"
+              placeholder="输入预设名称，如：公司、个人"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveAsPreset()}
+              className="input"
+              autoFocus
+            />
+            <button onClick={saveAsPreset} disabled={!presetName.trim()} className="btn btn-primary btn-small">
+              确定
+            </button>
+            <button onClick={() => { setShowPresetInput(false); setPresetName(""); }} className="btn btn-secondary btn-small">
+              取消
+            </button>
+          </div>
+        )}
+      </div>
 
       <footer className="footer">
         <p>配置文件: {displayPath}</p>
