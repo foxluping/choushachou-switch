@@ -231,13 +231,11 @@ fn save_config(config: Config) -> Result<(), String> {
             serde_json::Value::String(api_url),
         );
         env.insert(
-            "ANTHROPIC_API_KEY".to_string(),
-            serde_json::Value::String(config.api_key.clone()),
-        );
-        env.insert(
             "ANTHROPIC_AUTH_TOKEN".to_string(),
             serde_json::Value::String(config.api_key.clone()),
         );
+        // 移除 ANTHROPIC_API_KEY 避免冲突
+        env.remove("ANTHROPIC_API_KEY");
 
         env.insert(
             "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
